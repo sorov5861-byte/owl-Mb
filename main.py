@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 app_web = Flask('')
+
 @app_web.route('/')
 def home():
     return "Bot Alive!"
@@ -17,26 +18,52 @@ Thread(target=run_web).start()
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# OwlProxy API Keys
-OWL_AK = os.environ.get("OWL_ACCESS_KEY", "RMwMg5ff4GcBondlIV71XrNIlUHwRME2")
-OWL_SK = os.environ.get("OWL_SECRET_KEY", "4QCN0Ln9014DliUp4n8PXECq")
+# OwlProxy Credentials
+OWL_AK = "RMwMg5ff4GcBondlIV71XrNIlUHwRME2"
+OWL_SK = "4QCN0Ln9014DliUp4n8PXECq"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 **Proxy MB Checker Bot Active!**\nপ্রক্সি সেন্ড করুন MB চেক করার জন্য।", parse_mode="Markdown")
 
+async def check_proxy_live(proxy_url: str) -> bool:
+    test_urls = [
+        "http://cp.cloudflare.com/generate_204",
+        "http://proxy.owlproxy.com/proxy/extract",
+        "http://httpbin.org/ip"
+    ]
+    timeout = aiohttp.ClientTimeout(total=7)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for url in test_urls:
+            try:
+                async with session.get(url, proxy=proxy_url) as resp:
+                    if resp.status in [200, 204]:
+                        return True
+            except Exception:
+                continue
+    return False
+
 async def get_owl_balance():
-    ak = os.environ.get("OWL_ACCESS_KEY", OWL_AK)
-    sk = os.environ.get("OWL_SECRET_KEY", OWL_SK)
-    
-    url = f"https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance?accessKeyId={ak}&secretAccessKey={sk}"
+    url_get = f"https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance?accessKeyId={OWL_AK}&secretAccessKey={OWL_SK}"
     headers = {
-        "accessKeyId": ak,
-        "secretAccessKey": sk,
+        "accessKeyId": OWL_AK,
+        "secretAccessKey": OWL_SK,
         "Content-Type": "application/json"
     }
+    
+    timeout = aiohttp.ClientTimeout(total=8)
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=10) as resp:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            # 1. Try GET Request
+            async with session.get(url_get, headers=headers) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    if res.get("code") == 200 and "data" in res:
+                        return res["data"]
+            
+            # 2. Try POST Request (Fallback)
+            url_post = "https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance"
+            payload = {"accessKeyId": OWL_AK, "secretAccessKey": OWL_SK}
+            async with session.post(url_post, json=payload, headers=headers) as resp:
                 if resp.status == 200:
                     res = await resp.json()
                     if res.get("code") == 200 and "data" in res:
@@ -45,8 +72,11 @@ async def get_owl_balance():
         pass
     return None
 
-async def check_proxy(proxy_input: str):
-    parts = proxy_input.strip().split(":")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text.strip().split("\n")[0]
+    msg = await update.message.reply_text("🔄 প্রক্সি চেক করা হচ্ছে...")
+
+    parts = user_text.strip().split(":")
     if len(parts) == 4:
         ip, port, user, password = parts
         proxy_url = f"http://{user}:{password}@{ip}:{port}"
@@ -54,41 +84,28 @@ async def check_proxy(proxy_input: str):
         user, password = parts
         proxy_url = f"http://{user}:{password}@gate.owlproxy.com:8000"
     else:
-        return "❌ **ভুল ফরম্যাট!**"
+        await msg.edit_text("❌ **ভুল প্রক্সি ফরম্যাট!**\nসঠিক ফরম্যাট: `IP:Port:User:Pass`", parse_mode="Markdown")
+        return
 
-    target_url = "http://proxy.owlproxy.com/proxy/extract"
-    is_active = False
+    # 1. IP Active Test
+    is_alive = await check_proxy_live(proxy_url)
+    if not is_alive:
+        await msg.edit_text("❌ **Proxy Expired / Dead!**", parse_mode="Markdown")
+        return
 
-    try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(target_url, proxy=proxy_url) as response:
-                if response.status == 200:
-                    is_active = True
-    except Exception:
-        is_active = False
+    # 2. Fetch Balance Data
+    balance = await get_owl_balance()
 
-    if not is_active:
-        return "❌ **Proxy Expired / Dead!**"
-
-    balance_data = await get_owl_balance()
-    
-    reply_msg = "✅ **Proxy Active!**"
-    if balance_data:
-        rem = balance_data.get("remainingTraffic", "N/A")
-        used = balance_data.get("useTraffic", "N/A")
-        total = balance_data.get("accumulatedTraffic", "N/A")
-        reply_msg += f"\n📊 **অবশিষ্ট MB:** {rem} MB\n📉 **ব্যবহৃত MB:** {used} MB\n📦 **মোট প্যাকেজ:** {total} MB"
+    output = "✅ **Proxy Active!**\n"
+    if balance and isinstance(balance, dict):
+        rem = balance.get("remainingTraffic", "N/A")
+        used = balance.get("useTraffic", "N/A")
+        total = balance.get("accumulatedTraffic", "N/A")
+        output += f"\n📊 **অবশিষ্ট MB:** {rem} MB\n📉 **ব্যবহৃত MB:** {used} MB\n📦 **মোট প্যাকেজ:** {total} MB"
     else:
-        reply_msg += "\n📊 **অবশিষ্ট MB:** সচল (Data Active)"
+        output += "\n📊 **অবশিষ্ট MB:** সচল (Data Active)"
 
-    return reply_msg
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.strip().split("\n")[0]
-    msg = await update.message.reply_text("🔄 প্রক্সি চেক করা হচ্ছে...")
-    result = await check_proxy(user_text)
-    await msg.edit_text(result, parse_mode="Markdown")
+    await msg.edit_text(output, parse_mode="Markdown")
 
 def main():
     if not TOKEN:
