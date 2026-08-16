@@ -1,4 +1,5 @@
 import os
+import json
 import aiohttp
 from flask import Flask
 from threading import Thread
@@ -18,7 +19,6 @@ Thread(target=run_web).start()
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# OwlProxy Credentials
 OWL_AK = "RMwMg5ff4GcBondlIV71XrNIlUHwRME2"
 OWL_SK = "4QCN0Ln9014DliUp4n8PXECq"
 
@@ -28,8 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_proxy_live(proxy_url: str) -> bool:
     test_urls = [
         "http://cp.cloudflare.com/generate_204",
-        "http://proxy.owlproxy.com/proxy/extract",
-        "http://httpbin.org/ip"
+        "http://proxy.owlproxy.com/proxy/extract"
     ]
     timeout = aiohttp.ClientTimeout(total=7)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -43,34 +42,30 @@ async def check_proxy_live(proxy_url: str) -> bool:
     return False
 
 async def get_owl_balance():
-    url_get = f"https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance?accessKeyId={OWL_AK}&secretAccessKey={OWL_SK}"
-    headers = {
+    url = "https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance"
+    payload = {
         "accessKeyId": OWL_AK,
-        "secretAccessKey": OWL_SK,
-        "Content-Type": "application/json"
+        "secretAccessKey": OWL_SK
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "accessKeyId": OWL_AK,
+        "secretAccessKey": OWL_SK
     }
     
     timeout = aiohttp.ClientTimeout(total=8)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # 1. Try GET Request
-            async with session.get(url_get, headers=headers) as resp:
-                if resp.status == 200:
-                    res = await resp.json()
-                    if res.get("code") == 200 and "data" in res:
-                        return res["data"]
-            
-            # 2. Try POST Request (Fallback)
-            url_post = "https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance"
-            payload = {"accessKeyId": OWL_AK, "secretAccessKey": OWL_SK}
-            async with session.post(url_post, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    res = await resp.json()
-                    if res.get("code") == 200 and "data" in res:
-                        return res["data"]
-    except Exception:
-        pass
-    return None
+            async with session.post(url, json=payload, headers=headers) as resp:
+                return await resp.json()
+    except Exception as e:
+        try:
+            params = {"accessKeyId": OWL_AK, "secretAccessKey": OWL_SK}
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    return await resp.json()
+        except Exception as ex:
+            return {"error": str(ex)}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip().split("\n")[0]
@@ -87,23 +82,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ **ভুল প্রক্সি ফরম্যাট!**\nসঠিক ফরম্যাট: `IP:Port:User:Pass`", parse_mode="Markdown")
         return
 
-    # 1. IP Active Test
     is_alive = await check_proxy_live(proxy_url)
     if not is_alive:
         await msg.edit_text("❌ **Proxy Expired / Dead!**", parse_mode="Markdown")
         return
 
-    # 2. Fetch Balance Data
-    balance = await get_owl_balance()
+    res_data = await get_owl_balance()
 
     output = "✅ **Proxy Active!**\n"
-    if balance and isinstance(balance, dict):
-        rem = balance.get("remainingTraffic", "N/A")
-        used = balance.get("useTraffic", "N/A")
-        total = balance.get("accumulatedTraffic", "N/A")
+    if isinstance(res_data, dict) and res_data.get("code") == 200 and "data" in res_data:
+        data = res_data["data"]
+        rem = data.get("remainingTraffic", 0)
+        used = data.get("useTraffic", 0)
+        total = data.get("accumulatedTraffic", 0)
         output += f"\n📊 **অবশিষ্ট MB:** {rem} MB\n📉 **ব্যবহৃত MB:** {used} MB\n📦 **মোট প্যাকেজ:** {total} MB"
     else:
-        output += "\n📊 **অবশিষ্ট MB:** সচল (Data Active)"
+        raw_msg = json.dumps(res_data, ensure_ascii=False) if isinstance(res_data, dict) else str(res_data)
+        output += f"\n⚠️ **OwlProxy Response:**\n`{raw_msg}`"
 
     await msg.edit_text(output, parse_mode="Markdown")
 
