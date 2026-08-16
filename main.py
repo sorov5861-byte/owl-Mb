@@ -38,8 +38,30 @@ async def check_proxy(proxy_input: str):
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(target_url, proxy=proxy_url) as response:
                 if response.status == 200:
-                    mb = response.headers.get("X-Proxy-Remaining-MB", "সচল (Data Active)")
-                    return f"✅ **Proxy Active!**\n📊 **অবশিষ্ট MB:** {mb}"
+                    headers = {k.lower(): v for k, v in response.headers.items()}
+                    mb_header = headers.get("x-proxy-remaining-mb") or headers.get("proxy-remaining-mb") or headers.get("x-remaining-mb")
+                    
+                    try:
+                        data = await response.json()
+                        rem_mb = data.get("remaining_mb") or data.get("balance") or data.get("data")
+                        used_mb = data.get("used_mb") or data.get("used")
+                        
+                        if rem_mb is not None:
+                            res = f"✅ **Proxy Active!**\n📊 **অবশিষ্ট MB:** {rem_mb}"
+                            if used_mb is not None:
+                                res += f"\n📉 **ব্যবহৃত MB:** {used_mb}"
+                            return res
+                    except Exception:
+                        pass
+
+                    if mb_header:
+                        return f"✅ **Proxy Active!**\n📊 **অবশিষ্ট MB:** {mb_header}"
+                    
+                    body = await response.text()
+                    if body and len(body) < 150:
+                        return f"✅ **Proxy Active!**\n📊 **রেসপন্স ডাটা:** {body.strip()}"
+
+                    return "✅ **Proxy Active!**\n📊 **স্ট্যাটাস:** প্রক্সি ১০০% সচল (Data Active)"
                 else:
                     return f"⚠️ প্রক্সি সাড়া দিচ্ছে না ({response.status})"
     except Exception:
