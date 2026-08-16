@@ -17,8 +17,33 @@ Thread(target=run_web).start()
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
+# OwlProxy API Keys
+OWL_AK = os.environ.get("OWL_ACCESS_KEY", "RMwMg5ff4GcBondlIV71XrNIlUHwRME2")
+OWL_SK = os.environ.get("OWL_SECRET_KEY", "4QCN0Ln9014DliUp4n8PXECq")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 **Proxy MB Checker Bot Active!**\nপ্রক্সি সেন্ড করুন MB চেক করার জন্য।", parse_mode="Markdown")
+
+async def get_owl_balance():
+    ak = os.environ.get("OWL_ACCESS_KEY", OWL_AK)
+    sk = os.environ.get("OWL_SECRET_KEY", OWL_SK)
+    
+    url = f"https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance?accessKeyId={ak}&secretAccessKey={sk}"
+    headers = {
+        "accessKeyId": ak,
+        "secretAccessKey": sk,
+        "Content-Type": "application/json"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    if res.get("code") == 200 and "data" in res:
+                        return res["data"]
+    except Exception:
+        pass
+    return None
 
 async def check_proxy(proxy_input: str):
     parts = proxy_input.strip().split(":")
@@ -32,40 +57,32 @@ async def check_proxy(proxy_input: str):
         return "❌ **ভুল ফরম্যাট!**"
 
     target_url = "http://proxy.owlproxy.com/proxy/extract"
+    is_active = False
 
     try:
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(target_url, proxy=proxy_url) as response:
                 if response.status == 200:
-                    headers = {k.lower(): v for k, v in response.headers.items()}
-                    mb_header = headers.get("x-proxy-remaining-mb") or headers.get("proxy-remaining-mb") or headers.get("x-remaining-mb")
-                    
-                    try:
-                        data = await response.json()
-                        rem_mb = data.get("remaining_mb") or data.get("balance") or data.get("data")
-                        used_mb = data.get("used_mb") or data.get("used")
-                        
-                        if rem_mb is not None:
-                            res = f"✅ **Proxy Active!**\n📊 **অবশিষ্ট MB:** {rem_mb}"
-                            if used_mb is not None:
-                                res += f"\n📉 **ব্যবহৃত MB:** {used_mb}"
-                            return res
-                    except Exception:
-                        pass
-
-                    if mb_header:
-                        return f"✅ **Proxy Active!**\n📊 **অবশিষ্ট MB:** {mb_header}"
-                    
-                    body = await response.text()
-                    if body and len(body) < 150:
-                        return f"✅ **Proxy Active!**\n📊 **রেসপন্স ডাটা:** {body.strip()}"
-
-                    return "✅ **Proxy Active!**\n📊 **স্ট্যাটাস:** প্রক্সি ১০০% সচল (Data Active)"
-                else:
-                    return f"⚠️ প্রক্সি সাড়া দিচ্ছে না ({response.status})"
+                    is_active = True
     except Exception:
+        is_active = False
+
+    if not is_active:
         return "❌ **Proxy Expired / Dead!**"
+
+    balance_data = await get_owl_balance()
+    
+    reply_msg = "✅ **Proxy Active!**"
+    if balance_data:
+        rem = balance_data.get("remainingTraffic", "N/A")
+        used = balance_data.get("useTraffic", "N/A")
+        total = balance_data.get("accumulatedTraffic", "N/A")
+        reply_msg += f"\n📊 **অবশিষ্ট MB:** {rem} MB\n📉 **ব্যবহৃত MB:** {used} MB\n📦 **মোট প্যাকেজ:** {total} MB"
+    else:
+        reply_msg += "\n📊 **অবশিষ্ট MB:** সচল (Data Active)"
+
+    return reply_msg
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip().split("\n")[0]
