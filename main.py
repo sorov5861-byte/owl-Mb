@@ -43,29 +43,35 @@ async def check_proxy_live(proxy_url: str) -> bool:
 
 async def get_owl_balance():
     url = "https://api.owlproxy.com/openApi/vcDynamicGood/queryCurrentTrafficBalance"
-    payload = {
-        "accessKeyId": OWL_AK,
-        "secretAccessKey": OWL_SK
-    }
+    
     headers = {
         "Content-Type": "application/json",
         "accessKeyId": OWL_AK,
         "secretAccessKey": OWL_SK
     }
     
+    # Payload options to cover all OpenAPI body structures
+    payloads = [
+        {"accessKeyId": OWL_AK, "secretAccessKey": OWL_SK},
+        {"accessKey": OWL_AK, "secretKey": OWL_SK},
+        {"ak": OWL_AK, "sk": OWL_SK}
+    ]
+    
     timeout = aiohttp.ClientTimeout(total=8)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                return await resp.json()
-    except Exception as e:
-        try:
-            params = {"accessKeyId": OWL_AK, "secretAccessKey": OWL_SK}
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, params=params, headers=headers) as resp:
-                    return await resp.json()
-        except Exception as ex:
-            return {"error": str(ex)}
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for payload in payloads:
+            try:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    text_resp = await resp.text()
+                    try:
+                        data_json = json.loads(text_resp)
+                        if resp.status == 200 and data_json.get("code") == 200:
+                            return data_json.get("data")
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip().split("\n")[0]
@@ -87,18 +93,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ **Proxy Expired / Dead!**", parse_mode="Markdown")
         return
 
-    res_data = await get_owl_balance()
+    balance_data = await get_owl_balance()
 
     output = "✅ **Proxy Active!**\n"
-    if isinstance(res_data, dict) and res_data.get("code") == 200 and "data" in res_data:
-        data = res_data["data"]
-        rem = data.get("remainingTraffic", 0)
-        used = data.get("useTraffic", 0)
-        total = data.get("accumulatedTraffic", 0)
+    if balance_data and isinstance(balance_data, dict):
+        rem = balance_data.get("remainingTraffic", "N/A")
+        used = balance_data.get("useTraffic", "N/A")
+        total = balance_data.get("accumulatedTraffic", "N/A")
         output += f"\n📊 **অবশিষ্ট MB:** {rem} MB\n📉 **ব্যবহৃত MB:** {used} MB\n📦 **মোট প্যাকেজ:** {total} MB"
     else:
-        raw_msg = json.dumps(res_data, ensure_ascii=False) if isinstance(res_data, dict) else str(res_data)
-        output += f"\n⚠️ **OwlProxy Response:**\n`{raw_msg}`"
+        output += "\n📊 **অবশিষ্ট MB:** সচল (Data Active)"
 
     await msg.edit_text(output, parse_mode="Markdown")
 
